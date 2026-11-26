@@ -1,4 +1,4 @@
-# Guardian Wallet
+w# Guardian Wallet
 
 An AI wallet copilot with a firewall that lives on-chain.
 
@@ -26,6 +26,7 @@ If any rule fails, the transaction fails. The owner can always deposit, withdraw
 - Network: Solana devnet
 - Program ID: FWJTeHoNHWBCmKepVsNDS5MnLh891BfsK2HyLAJBj9sY
 - Explorer: https://explorer.solana.com/address/PASTE_FULL_PROGRAM_ID?cluster=devnet
+- Live Demo: https://amaylvia-gitseries.github.io/guardian-wallet/
 
 ### Accounts
 
