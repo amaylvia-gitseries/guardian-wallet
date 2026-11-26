@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guardian Wallet</title>
+<style>
+:root{--bg:#0e1316;--card:#161d21;--line:#26313a;--text:#e8eef2;--mute:#8d9fab;--ok:#3ddc97;--bad:#ff6b6b;--accent:#8aa4ff}
+@media (prefers-color-scheme:light){:root{--bg:#f3f5f7;--card:#fff;--line:#dce2e7;--text:#14202a;--mute:#5b6d79;--ok:#0f9d63;--bad:#d03b3b;--accent:#3556d6}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:560px;margin:0 auto;padding:16px 16px 40px}
+h1{font-size:22px;margin:8px 0 2px}
+.sub{color:var(--mute);margin:0 0 16px;font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
+.card h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);margin:0 0 10px;font-weight:600}
+.row{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:5px 0}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.pill{border-radius:99px;padding:2px 10px;font-size:13px;font-weight:600;border:1px solid currentColor}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.mute{color:var(--mute)}
+.bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:6px 0 2px}
+.bar i{display:block;height:100%;background:var(--accent)}
+.chat{display:flex;flex-direction:column;gap:10px}
+.msg{padding:10px 12px;border-radius:12px;max-width:92%;word-wrap:break-word;overflow-wrap:anywhere}
+.me{align-self:flex-end;background:var(--accent);color:#fff}
+.bot{align-self:flex-start;background:transparent;border:1px solid var(--line);width:100%}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--text);padding:8px 12px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.danger{border-color:var(--bad);color:var(--bad);font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+form{display:flex;gap:8px;margin-top:10px}
+input{flex:1;min-width:0;font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.rule{display:flex;gap:8px;padding:3px 0;font-size:15px}
+.verdict{margin:8px 0;padding:8px 10px;border-radius:10px;font-weight:600}
+.verdict.ok{background:rgba(61,220,151,.12)}.verdict.bad{background:rgba(255,107,107,.12)}
+a{color:var(--accent)}
+.foot{color:var(--mute);font-size:13px}
+</style>
+</head>
+<body>
+<main>
+<h1>Guardian Wallet</h1>
+<p class="sub">An AI wallet copilot with a firewall on Solana devnet. The agent proposes, the program decides.</p>
+
+<section class="card" id="policy"><h2>Your policy</h2><div class="mute">Loading from devnet…</div></section>
+
+<section class="card">
+<h2>Agent chat</h2>
+<div class="chat" id="chat"></div>
+<div class="chips" id="chips"></div>
+<form id="form"><input id="input" placeholder="Send 0.01 SOL to Ada" autocomplete="off"><button class="primary" type="submit">Send</button></form>
+</section>
+
+<section class="card">
+<h2>Owner controls</h2>
+<div class="row"><button id="pause">Pause agent</button><button id="reset">Reset demo</button></div>
+<div class="foot" id="ownerMsg">These sign with the demo owner key. In a real wallet the owner would sign with their own wallet.</div>
+</section>
+
+<p class="foot">The keys on this page are public demo keys on devnet, on purpose. Anyone holding the agent key still cannot move funds outside the policy, because the program enforces it. The chat reads simple sentences with rules; the checks and the rejections come from the on-chain program.</p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.98.0/lib/index.iife.min.js"></script>
+<script>
+const { Connection, PublicKey, Keypair, Transaction, TransactionInstruction, SystemProgram } = solanaWeb3;
+
+const PROGRAM = new PublicKey("FWJTeHoNHWBCmKepVsNDS5MnLh891BfsK2HyLAJBj9sY");
+const conn = new Connection("https://api.devnet.solana.com", "confirmed");
+const DISC_TRANSFER = [199, 111, 151, 49, 124, 13, 150, 44];
+const DISC_UPDATE = [212, 245, 246, 7, 163, 151, 18, 57];
+const ERRS = {
+  6000: "Paused: the owner has paused the agent",
+  6001: "RecipientNotAllowed: that address is not on the allowlist",
+  6002: "DailyLimitExceeded: this would pass the daily limit",
+  6003: "NotAgent: the signer is not the agent",
+  6004: "TooManyAllowed",
+  6005: "MathOverflow"
+};
+
+const enc = new TextEncoder();
+const kp = (s) => { const b = new Uint8Array(32); b.set(enc.encode(s)); return Keypair.fromSeed(b); };
+const OWNER = kp("guardian-demo-owner-devnet");
+const AGENT = kp("guardian-demo-agent-devnet");
+const FRIEND = kp("guardian-demo-friend-devnet").publicKey;
+const STRANGER = kp("guardian-demo-stranger-devnet").publicKey;
+const [POLICY] = PublicKey.findProgramAddressSync([enc.encode("policy"), OWNER.publicKey.toBytes()], PROGRAM);
+const [VAULT] = PublicKey.findProgramAddressSync([enc.encode("vault"), POLICY.toBytes()], PROGRAM);
+const RENT_MIN = 890880n;
+
+let S = null;
+const $ = (id) => document.getElementById(id);
+const sol = (l) => +(Number(l) / 1e9).toFixed(4);
+const short = (k) => k.slice(0, 4) + "…" + k.slice(-4);
+const nameOf = (k) => k === FRIEND.toBase58() ? "Ada" : short(k);
+const tx_url = (sig) => "https://explorer.solana.com/tx/" + sig + "?cluster=devnet";
+const spentNow = () => (Date.now() / 1000 - S.start >= 86400 ? 0n : S.spent);
+
+async function load() {
+  const [acc, bal] = await Promise.all([conn.getAccountInfo(POLICY, "confirmed"), conn.getBalance(VAULT, "confirmed")]);
+  if (!acc) throw new Error("Policy not found on devnet. Run the setup script in Playground first.");
+  const d = acc.data, v = new DataView(d.buffer, d.byteOffset, d.byteLength);
+  const key = (o) => new PublicKey(d.slice(o, o + 32)).toBase58();
+  const n = v.getUint32(99, true), allowed = [];
+  for (let i = 0; i < n; i++) allowed.push(key(103 + 32 * i));
+  S = { agent: key(40), limit: v.getBigUint64(72, true), spent: v.getBigUint64(80, true),
+        start: Number(v.getBigInt64(88, true)), paused: d[96] === 1, allowed, vault: BigInt(bal) };
+  render();
+}
+
+function render() {
+  const used = spentNow(), pct = S.limit > 0n ? Math.min(100, Number(used * 100n / S.limit)) : 100;
+  $("policy").innerHTML =
+    '<h2>Your policy</h2>' +
+    '<div class="row"><span>Agent</span><span class="pill ' + (S.paused ? "bad" : "ok") + '" id="status">' + (S.paused ? "Paused" : "Active") + '</span></div>' +
+    '<div class="row"><span>Vault balance</span><b id="vault">' + sol(S.vault) + ' SOL</b></div>' +
+    '<div class="row"><span>Spent today</span><span id="spent">' + sol(used) + ' of ' + sol(S.limit) + ' SOL</span></div>' +
+    '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
+    '<div class="row"><span>Allowed to receive</span><span id="allowed">' + S.allowed.map((k) => nameOf(k) + ' <span class="mono mute">' + short(k) + '</span>').join("<br>") + '</span></div>' +
+    '<div class="foot">Program <a class="mono" target="_blank" rel="noopener" href="https://explorer.solana.com/address/' + PROGRAM.toBase58() + '?cluster=devnet">' + short(PROGRAM.toBase58()) + '</a> · Policy <a class="mono" target="_blank" rel="noopener" href="https://explorer.solana.com/address/' + POLICY.toBase58() + '?cluster=devnet">' + short(POLICY.toBase58()) + '</a></div>';
+  $("pause").textContent = S.paused ? "Resume agent" : "Pause agent";
+}
+
+function add(cls, content) {
+  const el = document.createElement("div");
+  el.className = "msg " + cls;
+  if (typeof content === "string") el.textContent = content; else el.appendChild(content);
+  $("chat").appendChild(el);
+  el.scrollIntoView({ block: "nearest" });
+  return el;
+}
+
+function parse(text) {
+  const a = text.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);
+  let to = null;
+  if (a) { try { to = new PublicKey(a[0]); } catch (e) { to = null; } }
+  const rest = a ? text.replace(a[0], " ") : text;
+  const m = rest.match(/(\d+(?:\.\d+)?)/);
+  if (!to && /\b(ada|friend)\b/i.test(text)) to = FRIEND;
+  return { amount: m ? parseFloat(m[1]) : NaN, to };
+}
+
+function check(to, lam) {
+  const key = to.toBase58();
+  let left = S.limit - spentNow(); if (left < 0n) left = 0n;
+  const onList = S.allowed.includes(key);
+  return [
+    { ok: !S.paused, text: S.paused ? "The agent is paused by the owner" : "The agent is active" },
+    { ok: onList, text: onList ? "Recipient is on the allowlist" : "Recipient is not on the allowlist" },
+    { ok: lam <= left, text: (lam <= left ? "Within" : "Over") + " the daily limit (" + sol(left) + " SOL left today)" },
+    { ok: lam + RENT_MIN <= S.vault, text: lam + RENT_MIN <= S.vault ? "The vault has enough SOL" : "The vault does not have enough SOL" }
+  ];
+}
+
+function propose(text) {
+  const { amount, to } = parse(text);
+  if (!(amount > 0) || amount > 10 || !to) {
+    add("bot", "I can send SOL for you. Try: Send 0.01 SOL to Ada. You can also paste any Solana address instead of a name.");
+    return;
+  }
+  const lam = BigInt(Math.round(amount * 1e9)), rules = check(to, lam), ok = rules.every((r) => r.ok);
+  const box = document.createElement("div");
+  const head = document.createElement("div");
+  head.innerHTML = "<b></b>"; head.firstChild.textContent = "Proposed: " + sol(lam) + " SOL to " + nameOf(to.toBase58()) + " (" + short(to.toBase58()) + ")";
+  box.appendChild(head);
+  rules.forEach((r) => {
+    const row = document.createElement("div");
+    row.className = "rule";
+    row.innerHTML = '<span class="' + (r.ok ? "ok" : "bad") + '">' + (r.ok ? "✓" : "✕") + "</span><span></span>";
+    row.lastChild.textContent = r.text;
+    box.appendChild(row);
+  });
+  const v = document.createElement("div");
+  v.className = "verdict " + (ok ? "ok" : "bad");
+  v.textContent = ok ? "Guardian approves this payment." : "Guardian would block this. The rules are enforced by the program, so let's see what it says.";
+  box.appendChild(v);
+  const btn = document.createElement("button");
+  btn.className = ok ? "primary" : "danger";
+  btn.textContent = ok ? "Send as agent" : "Try on-chain anyway";
+  const out = document.createElement("div");
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = "Sending…";
+    try {
+      const r = await agentTransfer(to, lam);
+      const code = r.err && r.err.InstructionError && r.err.InstructionError[1] && r.err.InstructionError[1].Custom;
+      const link = ' <a target="_blank" rel="noopener" href="' + tx_url(r.sig) + '">View transaction</a>';
+      if (r.err) { out.className = "verdict bad"; out.innerHTML = "<span></span>" + link; out.firstChild.textContent = "Rejected on-chain. " + (ERRS[code] || JSON.stringify(r.err)) + "."; }
+      else { out.className = "verdict ok"; out.innerHTML = "Sent. The program moved the SOL from the vault." + link; }
+      btn.textContent = r.err ? "Rejected" : "Sent";
+    } catch (e) {
+      out.className = "verdict bad"; out.textContent = "Could not send: " + (e.message || e); btn.textContent = "Failed";
+    }
+    try { await load(); } catch (e) {}
+  };
+  box.appendChild(btn); box.appendChild(out);
+  add("bot", box);
+}
+
+async function run(ix, signer) {
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+  const tx = new Transaction({ feePayer: signer.publicKey, blockhash, lastValidBlockHeight }).add(ix);
+  tx.sign(signer);
+  const sig = await conn.sendRawTransaction(tx.serialize(), { skipPreflight: true });
+  for (let i = 0; i < 45; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const st = (await conn.getSignatureStatuses([sig])).value[0];
+    if (st && (st.err || st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) return { sig, err: st.err };
+  }
+  throw new Error("Timed out waiting for confirmation. Check the explorer.");
+}
+
+function agentTransfer(to, lam) {
+  const data = new Uint8Array(16);
+  data.set(DISC_TRANSFER, 0);
+  new DataView(data.buffer).setBigUint64(8, lam, true);
+  const ix = new TransactionInstruction({
+    programId: PROGRAM, data,
+    keys: [
+      { pubkey: AGENT.publicKey, isSigner: true, isWritable: false },
+      { pubkey: POLICY, isSigner: false, isWritable: true },
+      { pubkey: VAULT, isSigner: false, isWritable: true },
+      { pubkey: to, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
+    ]
+  });
+  return run(ix, AGENT);
+}
+
+function ownerUpdate(limit, allowed, paused) {
+  const keys = allowed.map((a) => new PublicKey(a).toBytes());
+  const data = new Uint8Array(8 + 32 + 8 + 4 + 32 * keys.length + 1), v = new DataView(data.buffer);
+  data.set(DISC_UPDATE, 0);
+  data.set(new PublicKey(S.agent).toBytes(), 8);
+  v.setBigUint64(40, limit, true);
+  v.setUint32(48, keys.length, true);
+  keys.forEach((k, i) => data.set(k, 52 + 32 * i));
+  data[52 + 32 * keys.length] = paused ? 1 : 0;
+  const ix = new TransactionInstruction({
+    programId: PROGRAM, data,
+    keys: [
+      { pubkey: OWNER.publicKey, isSigner: true, isWritable: false },
+      { pubkey: POLICY, isSigner: false, isWritable: true }
+    ]
+  });
+  return run(ix, OWNER);
+}
+
+async function ownerAction(label, fn) {
+  const msg = $("ownerMsg");
+  $("pause").disabled = $("reset").disabled = true;
+  msg.textContent = label + "…";
+  try {
+    const r = await fn();
+    msg.innerHTML = r.err ? "That failed on-chain." : 'Done. <a target="_blank" rel="noopener" href="' + tx_url(r.sig) + '">View transaction</a>';
+    await load();
+  } catch (e) { msg.textContent = "Could not do that: " + (e.message || e); }
+  $("pause").disabled = $("reset").disabled = false;
+}
+$("pause").onclick = () => S && ownerAction(S.paused ? "Resuming the agent" : "Pausing the agent", () => ownerUpdate(S.limit, S.allowed, !S.paused));
+$("reset").onclick = () => S && ownerAction("Resetting the demo", () => ownerUpdate(50000000n, [FRIEND.toBase58()], false));
+
+$("form").onsubmit = (e) => {
+  e.preventDefault();
+  const t = $("input").value.trim();
+  if (!t) return;
+  $("input").value = "";
+  add("me", t);
+  if (S) propose(t); else add("bot", "Still loading your policy from devnet. Try again in a moment.");
+};
+
+[["Pay Ada 0.01 SOL", "Send 0.01 SOL to Ada"],
+ ["Pay an unknown address", "Send 0.01 SOL to " + STRANGER.toBase58()],
+ ["Pay Ada 0.2 SOL", "Send 0.2 SOL to Ada"]].forEach(([label, text]) => {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.onclick = () => { $("input").value = text; $("form").requestSubmit(); };
+  $("chips").appendChild(b);
+});
+
+add("bot", "Hi, I'm your wallet copilot. Ask me to send SOL and I'll check it against your rules first. Then you can send it, and the on-chain program makes the final call.");
+load().catch((e) => { $("policy").innerHTML = '<h2>Your policy</h2><div class="bad">' + String(e.message || e).replace(/</g, "&lt;") + "</div>"; });
+</script>
+</body>
+</html>
