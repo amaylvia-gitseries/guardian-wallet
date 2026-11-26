@@ -1,89 +1,190 @@
-describe("guardian", () => {
-const payer = pg.wallet.keypair;
-const owner = web3.Keypair.generate();
-const agent = web3.Keypair.generate();
-const impostor = web3.Keypair.generate();
-const friend = web3.Keypair.generate();
-const stranger = web3.Keypair.generate();
-const sys = web3.SystemProgram.programId;
-const C = { commitment: "confirmed" };
-const [policy] = web3.PublicKey.findProgramAddressSync(
-[Buffer.from("policy"), owner.publicKey.toBuffer()],
-pg.PROGRAM_ID
-);
-const [vault] = web3.PublicKey.findProgramAddressSync(
-[Buffer.from("vault"), policy.toBuffer()],
-pg.PROGRAM_ID
-);
-const sol = (n) => new BN(Math.round(n * web3.LAMPORTS_PER_SOL));
-async function expectFail(p, needle) {
-try {
-await p;
-} catch (e) {
-const text = String(e) + JSON.stringify(e.logs || "");
-assert(text.includes(needle), "wanted " + needle + " but got: " + text.slice(0, 300));
-return;
+
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{self, Transfer};
+declare_id!("11111111111111111111111111111111");
+#[program]
+pub mod guardian {
+use super::*;
+pub fn initialize(
+ctx: Context<Initialize>,
+agent: Pubkey,
+daily_limit: u64,
+allowed: Vec<Pubkey>,
+) -> Result<()> {
+require!(allowed.len() <= 8, GuardianError::TooManyAllowed);
+let policy = &mut ctx.accounts.policy;
+policy.owner = ctx.accounts.owner.key();
+policy.agent = agent;
+policy.daily_limit = daily_limit;
+policy.spent = 0;
+policy.window_start = Clock::get()?.unix_timestamp;
+policy.paused = false;
+policy.policy_bump = ctx.bumps.policy;
+policy.vault_bump = ctx.bumps.vault;
+policy.allowed = allowed;
+Ok(())
 }
-assert.fail("expected " + needle + " but it succeeded");
+pub fn deposit(ctx: Context<OwnerVault>, amount: u64) -> Result<()> {
+system_program::transfer(
+CpiContext::new(
+ctx.accounts.system_program.to_account_info(),
+Transfer {
+from: ctx.accounts.owner.to_account_info(),
+to: ctx.accounts.vault.to_account_info(),
+},
+),
+amount,
+)
 }
-const transfer = (to, amount, signer = agent) =>
-pg.program.methods
-.agentTransfer(sol(amount))
-.accounts({ agent: signer.publicKey, policy, vault, recipient: to, systemProgram: sys })
-.signers([signer])
-.rpc(C);
-const setPolicy = (limit, paused) =>
-pg.program.methods
-.updatePolicy(agent.publicKey, sol(limit), [friend.publicKey], paused)
-.accounts({ owner: owner.publicKey, policy })
-.signers([owner])
-.rpc(C);
-it("funds a fresh owner", async () => {
-const tx = new web3.Transaction().add(
-web3.SystemProgram.transfer({
-fromPubkey: payer.publicKey,
-toPubkey: owner.publicKey,
-lamports: 0.2 * web3.LAMPORTS_PER_SOL,
-})
+pub fn withdraw(ctx: Context<OwnerVault>, amount: u64) -> Result<()> {
+let policy_key = ctx.accounts.policy.key();
+let bump = [ctx.accounts.policy.vault_bump];
+let seeds: &[&[u8]] = &[b"vault", policy_key.as_ref(), &bump];
+system_program::transfer(
+CpiContext::new_with_signer(
+ctx.accounts.system_program.to_account_info(),
+Transfer {
+from: ctx.accounts.vault.to_account_info(),
+to: ctx.accounts.owner.to_account_info(),
+},
+&[seeds],
+),
+amount,
+)
+}
+pub fn update_policy(
+ctx: Context<UpdatePolicy>,
+agent: Pubkey,
+daily_limit: u64,
+allowed: Vec<Pubkey>,
+paused: bool,
+) -> Result<()> {
+require!(allowed.len() <= 8, GuardianError::TooManyAllowed);
+let policy = &mut ctx.accounts.policy;
+policy.agent = agent;
+policy.daily_limit = daily_limit;
+policy.allowed = allowed;
+policy.paused = paused;
+Ok(())
+}
+pub fn agent_transfer(ctx: Context<AgentTransfer>, amount: u64) -> Result<()> {
+let policy_key = ctx.accounts.policy.key();
+let recipient_key = ctx.accounts.recipient.key();
+let now = Clock::get()?.unix_timestamp;
+let policy = &mut ctx.accounts.policy;
+require!(!policy.paused, GuardianError::Paused);
+require!(
+policy.allowed.contains(&recipient_key),
+GuardianError::RecipientNotAllowed
 );
-await web3.sendAndConfirmTransaction(pg.connection, tx, [payer], C);
-});
-it("creates the policy", async () => {
-await pg.program.methods
-.initialize(agent.publicKey, sol(0.5), [friend.publicKey])
-.accounts({ owner: owner.publicKey, policy, vault, systemProgram: sys })
-.signers([owner])
-.rpc(C);
-const p = await pg.program.account.policy.fetch(policy, "confirmed");
-assert(p.agent.equals(agent.publicKey));
-assert(p.dailyLimit.eq(sol(0.5)));
-assert.equal(p.allowed.length, 1);
-});
-it("owner funds the vault", async () => {
-await pg.program.methods
-.deposit(sol(0.1))
-.accounts({ owner: owner.publicKey, policy, vault, systemProgram: sys })
-.signers([owner])
-.rpc(C);
-assert.equal(await pg.connection.getBalance(vault, "confirmed"), sol(0.1).toNumber());
-});
-it("agent pays an allowed address inside the limit", async () => {
-await transfer(friend.publicKey, 0.02);
-assert.equal(await pg.connection.getBalance(friend.publicKey, "confirmed"), sol(0.02).toNumber());
-});
-it("agent cannot pay an address that is not allowed", async () => {
-await expectFail(transfer(stranger.publicKey, 0.01), "RecipientNotAllowed");
-});
-it("someone who is not the agent cannot move funds", async () => {
-await expectFail(transfer(friend.publicKey, 0.01, impostor), "NotAgent");
-});
-it("agent cannot pass the daily limit", async () => {
-await setPolicy(0.03, false);
-await expectFail(transfer(friend.publicKey, 0.02), "DailyLimitExceeded");
-await transfer(friend.publicKey, 0.01);
-});
-it("pausing blocks the agent", async () => {
-await setPolicy(0.5, true);
-await expectFail(transfer(friend.publicKey, 0.001), "Paused");
-});
-});
+if now - policy.window_start >= 86_400 {
+policy.window_start = now;
+policy.spent = 0;
+}
+let new_spent = policy
+.spent
+.checked_add(amount)
+.ok_or(GuardianError::MathOverflow)?;
+require!(new_spent <= policy.daily_limit, GuardianError::DailyLimitExceeded);
+policy.spent = new_spent;
+let bump = [policy.vault_bump];
+let seeds: &[&[u8]] = &[b"vault", policy_key.as_ref(), &bump];
+system_program::transfer(
+CpiContext::new_with_signer(
+ctx.accounts.system_program.to_account_info(),
+Transfer {
+from: ctx.accounts.vault.to_account_info(),
+to: ctx.accounts.recipient.to_account_info(),
+},
+&[seeds],
+),
+amount,
+)
+}
+}
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+#[account(mut)]
+pub owner: Signer<'info>,
+#[account(
+init,
+payer = owner,
+space = 8 + Policy::INIT_SPACE,
+seeds = [b"policy", owner.key().as_ref()],
+bump
+)]
+pub policy: Account<'info, Policy>,
+#[account(seeds = [b"vault", policy.key().as_ref()], bump)]
+pub vault: SystemAccount<'info>,
+pub system_program: Program<'info, System>,
+}
+#[derive(Accounts)]
+pub struct OwnerVault<'info> {
+#[account(mut)]
+pub owner: Signer<'info>,
+#[account(
+seeds = [b"policy", owner.key().as_ref()],
+bump = policy.policy_bump,
+has_one = owner
+)]
+pub policy: Account<'info, Policy>,
+#[account(mut, seeds = [b"vault", policy.key().as_ref()], bump = policy.vault_bump)]
+pub vault: SystemAccount<'info>,
+pub system_program: Program<'info, System>,
+}
+#[derive(Accounts)]
+pub struct UpdatePolicy<'info> {
+pub owner: Signer<'info>,
+#[account(
+mut,
+seeds = [b"policy", owner.key().as_ref()],
+bump = policy.policy_bump,
+has_one = owner
+)]
+pub policy: Account<'info, Policy>,
+}
+#[derive(Accounts)]
+pub struct AgentTransfer<'info> {
+pub agent: Signer<'info>,
+#[account(
+mut,
+seeds = [b"policy", policy.owner.as_ref()],
+bump = policy.policy_bump,
+constraint = agent.key() == policy.agent @ GuardianError::NotAgent
+)]
+pub policy: Account<'info, Policy>,
+#[account(mut, seeds = [b"vault", policy.key().as_ref()], bump = policy.vault_bump)]
+pub vault: SystemAccount<'info>,
+#[account(mut)]
+pub recipient: SystemAccount<'info>,
+pub system_program: Program<'info, System>,
+}
+#[account]
+#[derive(InitSpace)]
+pub struct Policy {
+pub owner: Pubkey,
+pub agent: Pubkey,
+pub daily_limit: u64,
+pub spent: u64,
+pub window_start: i64,
+pub paused: bool,
+pub policy_bump: u8,
+pub vault_bump: u8,
+#[max_len(8)]
+pub allowed: Vec<Pubkey>,
+}
+#[error_code]
+pub enum GuardianError {
+#[msg("Agent is paused")]
+Paused,
+#[msg("Recipient is not on the allowlist")]
+RecipientNotAllowed,
+#[msg("Daily limit exceeded")]
+DailyLimitExceeded,
+#[msg("Signer is not the agent")]
+NotAgent,
+#[msg("Too many allowed addresses (max 8)")]
+TooManyAllowed,
+#[msg("Math overflow")]
+MathOverflow,
+  }
