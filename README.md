@@ -2,7 +2,7 @@
 
 **A spending firewall for AI agents on Solana.** Your agent gets its own key, but a Solana program decides what that key can actually do. Even a tricked agent can't empty your vault.
 
-Built for the Dev3pack Global Hackathon, combining two ideas from Solana's Request for Startups: an AI financial advisor in your wallet (#8) and security for the agentic age (#4).
+Built for the Dev3pack Global Hackathon, combining two ideas from Solana's Request for Startups: an AI financial advisor in your wallet and security for the agentic age.
 
 - **Live demo:** https://amaylvia-gitseries.github.io/guardian-wallet/ (no wallet needed, runs on devnet)
 - **Program (devnet):** [`FWJTeHoNHWBCmKepVsNDS5MnLh891BfsK2HyLAJBj9sY`](https://explorer.solana.com/address/FWJTeHoNHWBCmKepVsNDS5MnLh891BfsK2HyLAJBj9sY?cluster=devnet)
