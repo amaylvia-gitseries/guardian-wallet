@@ -77,17 +77,7 @@ Note: the vault is a system account and must stay rent-exempt (about 0.00089 SOL
 
 - Program: 8 passing tests on devnet, covering the policy, deposit, an allowed payment, and each rule's failure case (not allowlisted, not the agent, over the limit, paused).
 - Engine: `npm i @solana/web3.js @solana/spl-token` then `node --test guardian-core.test.js` (29 tests).
-
-## What was built when
-
-Before the hackathon (Nov 23 to 26): the Anchor program and its tests, deployed to devnet; the risk engine `guardian-core.js` with its unit tests; and a first single-page demo.
-
-During the hackathon (Nov 27 to 28): the landing page, the demo app, the isolated sandboxes, the rules editor, the activity feed, wiring the transaction inspector into the app, and this README.
-
-## AI assistance
-
-Built with AI assistance: Claude (Anthropic) helped write and test the code. The author deployed the program to devnet, ran its tests and put the project together.
-
+w
 ## Honest notes
 
 - This is a devnet prototype and has not been audited. Don't use real funds.
