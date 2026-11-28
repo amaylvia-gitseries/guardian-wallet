@@ -1,7 +1,7 @@
 
 use anchor_lang::prelude::*;
 use anchor_lang::system_program::{self, Transfer};
-declare_id!("11111111111111111111111111111111");
+declare_id!("FWJTeHoNHWBCmKepVsNDS5MnLh891BfsK2HyLAJBj9sY");
 #[program]
 pub mod guardian {
 use super::*;
