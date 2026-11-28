@@ -9,6 +9,7 @@ Built for the Dev3pack Global Hackathon, combining two ideas from Solana's Reque
 - **Live demo:** https://amaylvia-gitseries.github.io/guardian-wallet/ (no wallet needed, runs on devnet)
 - **Program (devnet):** [`FWJTeHoNHWBCmKepVsNDS5MnLh891BfsK2HyLAJBj9sY`](https://explorer.solana.com/address/FWJTeHoNHWBCmKepVsNDS5MnLh891BfsK2HyLAJBj9sY?cluster=devnet)
 - - **Built with:** Rust and Anchor (the on-chain program), TypeScript (program tests), JavaScript with @solana/web3.js (the demo app), Solana Playground, Solana devnet
+  - - **Note:** the repo and demo URLs still use the working name `guardian-wallet`. The project is Portcullis.
 
 ## The problem
 
